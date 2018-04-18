@@ -1,12 +1,57 @@
+const pubsub = require('@google-cloud/pubsub')();
+
 const allCards = require('./AllCards.json');
 
-exports.wordBagSpellcheck = (req,res) => {
-  if (req.body.fieldsDetected === undefined) {
-    res.status(400).send('A required parameter is undefined');
-  } else {
-    const closestMatches = matchFieldContentsToCardIds(req.body.fieldsDetected,allCards);
-    res.status(200).send(closestMatches);
+const fieldsPermitted = ['name', 'text'];
+
+const DEST_TOPIC_NAME = 'spellcheck-output';
+
+const MATCHING_LIMIT = 5;
+
+exports.wordBagSpellcheck = (event) => {
+  const pubsubData = event.data;
+  const data       = JSON.parse(Buffer.from(pubsubData.data, 'base64').toString());
+  
+  const id             = data.id;
+  const fieldsDetected = data.fields;
+  
+  for (let field in fieldsDetected) {
+    if (!(field in fieldsPermitted)) {
+      return Promise.reject('Illegal input field: ' + field);
+    }
   }
+  
+  return new Promise((resolve,reject) => {
+    const closestMatches = matchFieldContentsToCardIdsWithLimit(req.body.fieldsDetected,allCards,limit);
+    
+    resolve(closestMatches);
+  }).then((closestMatches) => {
+    const topic     = pubsub.topic(DEST_TOPIC_NAME);
+    const publisher = topic.publisher();
+  
+    const payload = {id: id, fields: closestMatches};
+  
+    const dataBuffer = Buffer.from(JSON.stringify(payload));
+  
+    return publisher.publish(dataBuffer);
+  }).catch((err) => {
+    console.error(err);
+  });
+}
+
+function matchFieldContentsToCardIdsWithLimit(fieldsDetected,fieldsCanonical,limit) {
+  if (limit<=0) {
+    throw new Error('Matching limit should be >0');
+  }
+  
+  const closestMatches = matchFieldContentsToCardIds(fieldsDetected,fieldsCanonical);
+  
+  const limitedClosestMatches = {};
+  for (let field in closestMatches) {
+    limitedClosestMatches[field] = closestMatches[field].slice(0,limit);
+  }
+  
+  return limitedClosestMatches;
 }
 
 function matchFieldContentsToCardIds(fieldsDetected,fieldsCanonical) {

@@ -1,0 +1,11 @@
+{
+  "name": "identifier",
+  "version": "0.0.0",
+  "description": "A function for concretely identifying a card based on the results of previous identification steps.",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/datastore": 
+  },
+  "author": "Dallas Holder",
+  "license": "UNLICENSED"
+}

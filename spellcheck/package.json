@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "description": "A spellchecking function to be run after OCR.",
   "main": "index.js",
+  "dependencies": {
+    "@google-cloud/pubsub": "^0.16.5"
+  },
   "author": "Dallas Holder",
   "license": "UNLICENSED"
 }
