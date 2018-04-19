@@ -69,16 +69,16 @@ function localFilesToBucketWithBatchingMetadata(filenames,destBucketName,batchSi
   let   i              = 0;
   const batchFilenames = [];
   return Promise.each(filenames, (filename) => {
-    batchFilenames.push(filenames[i]);
+    batchFilenames.push(filename);
     if (i%batchSize==0 || i==filenames.length-1) {
-      uploadOptions  = {destination: filenames[i], metadata: {batchFilenames: batchFilenames}};
+      uploadOptions  = {destination: filename, metadata: {batchFilenames: batchFilenames}};
       batchFilenames = [];
     } else {
-      uploadOptions = {destination: filenames[i]};
+      uploadOptions = {destination: filename};
     }
     
     i++;
     
-    return destBucket.upload(filenames[i-1], uploadOptions);
+    return destBucket.upload(filename, uploadOptions);
   });
 }
