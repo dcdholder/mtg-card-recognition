@@ -4,7 +4,7 @@
   "description": "A function for unzipping and buffering zipped image archives for the use of the image batcher.",
   "main": "index.js",
   "dependencies": {
-    "yauzl": "2.9.1",
+    "yauzl": "^2.9.1",
     
     "@google-cloud/storage": "^1.6.0"
   },

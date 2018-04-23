@@ -4,32 +4,39 @@ const yauzl = require('yauzl');
 const storage = require('@google-cloud/storage')();
 
 const TEMPORARY_DIRECTORY = '/tmp/';
-const DEST_BUCKET_NAME    = 'mtg-card-recognition-batchable-images';
+const DEST_BUCKET_NAME    = 'mtg-card-recognition-images-to-batch';
 
 //these must be global for localFileToBucketWithBatchingMetadata to work
-const destBucket = gcs.bucket(DEST_BUCKET_NAME);
-const batchSize;
+const destBucket = storage.bucket(DEST_BUCKET_NAME);
 
-exports.zipper = (event) => {
+let batchSize;
+let zipPath;
+
+exports.unzip = (event) => {
   const bucketEvent = event.data;
+
+  const sourceBucket = storage.bucket(bucketEvent.bucket);
+  const sourceFile   = sourceBucket.file(bucketEvent.name);
+
+  let metadata;
+
+  return sourceFile.getMetadata().then((data) => {
+    metadata  = data[0];
+    batchSize = metadata.metadata.batchSize;
     
-  if(bucketEvent.resourceState === 'exists' && bucketEvent.metageneration === 1) { //run only on source object creation
-    const sourceBucket = storage.bucket(bucketEvent.bucket);
-    const sourceFile   = sourceBucket.file(bucketEvent.name);
-
-    const metadata;
-
-    return sourceFile.getMetadata().then(function(data) {
-      metadata  = data[0];
-      batchSize = metadata.batchSize;
+    if (!batchSize) {
+      throw new Error('Object ' + bucketEvent.name + ' missing \'batchSize\' metadata attribute');
+    }
+    
+    let zipFilename = bucketEvent.name;
+    zipPath         = TEMPORARY_DIRECTORY + zipFilename;
       
-      let zipFilename = bucketEvent.name;
-      
-      return sourceFile.download({destination: zipFilename});
-    }).then(() => {
-      return unzipFileByFile(zipFilename,localFileToBucketWithBatchingMetadata);
-    });
-  }
+    return sourceFile.download({destination: zipPath});
+  }).then(() => {
+    return unzipFileByFile(zipPath,localFileToBucketWithBatchingMetadata);
+  }).catch((err) => {
+    console.error(err);
+  });
 }
 
 function unzipFileByFile(zipFilename, onFileUnzipPromise) {
@@ -45,20 +52,20 @@ function unzipFileByFile(zipFilename, onFileUnzipPromise) {
         if (/\//.test(entry.fileName)) {
           throw new Error('Cannot read from nested directories');
         } else {
-          let destinationFilename = TEMPORARY_DIRECTORY + entry.fileName;
-          filenames.push(destinationFilename);
+          let destinationPath = TEMPORARY_DIRECTORY + entry.fileName;
+          filenames.push(destinationPath);
           
           zipFile.openReadStream(entry, (err, readStream) => {
             if (err) throw err;
             readStream.on('end', () => {
               //provide the callback promise with the current filename, list of all filenames up to that point, and the final number
               //you may only need the current filename
-              onFileUnzipPromise(destinationFilename,filenames,zipFile.entryCount).then(() => {
+              onFileUnzipPromise(destinationPath,filenames,zipFile.entryCount).then(() => {
                 zipFile.readEntry();
               });
             });
                     
-            readStream.pipe(fs.createWriteStream(destinationFilename));
+            readStream.pipe(fs.createWriteStream(destinationPath));
           });
         }
       });
@@ -74,15 +81,22 @@ function unzipFileByFile(zipFilename, onFileUnzipPromise) {
 //do not need to wait for all files to be unzipped before we can begin transferring them over
 //TODO: Is the dependence on global variables really a concern? They are static, after all
 //TODO: delete files after you've moved them -- could save almost 50% memory
-function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {  
-  let index = filenames.length-1;
-  if (index%batchSize==0 || index==totalCount-1) {
-    let batchFilenames = filenames.slice(index-(batchSize-1),index+1);
+function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {
+  let destFilename = filename.split('/')[filename.split('/').length-1];
+  
+  let destFilenames = [];
+  for (let i=0;i<filenames.length;i++) {
+    destFilenames.push(filenames[i].split('/')[filename.split('/').length-1]);
+  }
     
-    uploadOptions  = {destination: filename, metadata: {batchFilenames: batchFilenames}};
+  let index = filenames.length-1;
+  if ((index%batchSize==0 && index!=0) || index==totalCount-1) {
+    let batchFilenames = destFilenames.slice(index-(batchSize-1),index+1);
+    
+    uploadOptions  = {destination: destFilename, metadata: {metadata: {batchFilenames: JSON.stringify(batchFilenames)}}};
     batchFilenames = [];
   } else {
-    uploadOptions = {destination: filename};
+    uploadOptions = {destination: destFilename};
   }
   
   return destBucket.upload(filename, uploadOptions);
