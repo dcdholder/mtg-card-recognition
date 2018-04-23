@@ -86,18 +86,27 @@ function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {
   
   let destFilenames = [];
   for (let i=0;i<filenames.length;i++) {
-    destFilenames.push(filenames[i].split('/')[filename.split('/').length-1]);
+    destFilenames.push(filenames[i].split('/')[filenames[i].split('/').length-1]);
   }
     
   let index = filenames.length-1;
-  if ((index%batchSize==0 && index!=0) || index==totalCount-1) {
-    let batchFilenames = destFilenames.slice(index-(batchSize-1),index+1);
+  if ((index%batchSize==0 && (index!=0 || batchSize==1)) || index==totalCount-1) {
+    let nonTriggerOriginalFilenames = filenames.slice(index-(batchSize-1),index);
+    let nonTriggerFiles             = destFilenames.slice(index-(batchSize-1),index);
+    let batchFiles                  = [destFilename];
+    batchFiles.push(...nonTriggerFiles);
+
+    let triggerFileUploadOptions = {destination: destFilename, metadata: {metadata: {batchFilenames: JSON.stringify(batchFiles)}}};
     
-    uploadOptions  = {destination: destFilename, metadata: {metadata: {batchFilenames: JSON.stringify(batchFilenames)}}};
-    batchFilenames = [];
+    let nonTriggerFileUploads = [];
+    for (let i=0;i<nonTriggerFiles.length;i++) {
+      nonTriggerFileUploads.push(() => {return destBucket.upload(nonTriggerOriginalFilenames[i],{destination: nonTriggerFiles[i]})});
+    }
+    
+    return Promise.all(nonTriggerFileUploads).then(() => {
+      return destBucket.upload(filename,triggerFileUploadOptions);
+    });
   } else {
-    uploadOptions = {destination: destFilename};
+    return Promise.resolve();
   }
-  
-  return destBucket.upload(filename, uploadOptions);
 }
