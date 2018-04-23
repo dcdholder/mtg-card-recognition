@@ -100,7 +100,11 @@ function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {
     
     let nonTriggerFileUploads = [];
     for (let i=0;i<nonTriggerFiles.length;i++) {
-      nonTriggerFileUploads.push(() => {return destBucket.upload(nonTriggerOriginalFilenames[i],{destination: nonTriggerFiles[i]})});
+      nonTriggerFileUploads.push(new Promise((resolve,reject) => {
+        destBucket.upload(nonTriggerOriginalFilenames[i],{destination: nonTriggerFiles[i]}).then(() => {
+          resolve();
+        });
+      }));
     }
     
     return Promise.all(nonTriggerFileUploads).then(() => {
