@@ -82,7 +82,7 @@ function unzipFileByFile(zipFilename, onFileUnzipPromise) {
 //TODO: Is the dependence on global variables really a concern? They are static, after all
 //TODO: delete files after you've moved them -- could save almost 50% memory
 function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {
-  if (batchSize<1 || !Number.isInteger(batchSize)) {
+  if (batchSize<1 || !Number.isInteger(Number(batchSize))) {
     throw new Error('Batch size must be a positive integer in order to set batch image metadata');
   }
   
@@ -94,9 +94,16 @@ function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {
   }
     
   let index = filenames.length-1;
-  if ((index%batchSize==0 && (index!=0 || batchSize==1)) || index==totalCount-1) {
-    let nonTriggerOriginalFilenames = filenames.slice(index-(batchSize-1),index);
-    let nonTriggerFiles             = destFilenames.slice(index-(batchSize-1),index);
+  if (((index+1)%batchSize==0 && (index!=0 || batchSize==1)) || index==totalCount-1) {
+    let adjustedBatchSize;
+    if (index==totalCount-1) {
+      adjustedBatchSize = totalCount%batchSize;
+    } else {
+      adjustedBatchSize = batchSize;
+    }
+    
+    let nonTriggerOriginalFilenames = filenames.slice(index-(adjustedBatchSize-1),index);
+    let nonTriggerFiles             = destFilenames.slice(index-(adjustedBatchSize-1),index);
     let batchFiles                  = [destFilename];
     batchFiles.push(...nonTriggerFiles);
 
