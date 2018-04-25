@@ -8,48 +8,56 @@ const Jimp = require('jimp');
 
 const MAX_BATCHED_SIZE = 10 * 1024 * 1024;
 
+const TEMPORARY_DIRECTORY = '/tmp/';
+ 
+const DEST_BUCKET_NAME = 'mtg-card-recognition-images';
+const destBucket       = storage.bucket(DEST_BUCKET_NAME);
+
 let bucketEvent;
 let sourceBucket;
 let sourceFile;
 
 //operates purely on bucket file metadata
-exports.imageBatcher = function imageBatcher(event) {
+exports.imageBatcher = (event) => {
   bucketEvent = event.data;
 
   sourceBucket = storage.bucket(bucketEvent.bucket);
   sourceFile   = sourceBucket.file(bucketEvent.name);
   
-  return getBatchFilenames(event).then((batchFilenames) => {
+  return getBatchFilenames().then((batchFilenames) => {
     if (batchFilenames.length!=0) {
       return downloadBatchFiles(batchFilenames).then((batchFilePaths) => {
         return getDimensionsOfImages(batchFilePaths);
       }).then((dimensionsOfImages) => {
         return resizeImagesToCommonDimensions(dimensionsOfImages);
-      }).then((filePathsToBatch) => {
-        return stitchImageBatch(filePathsToBatch);
-      }).then((batchedImagePath) => {
-        return reduceQualityToFileSize(batchedImagePath,MAX_BATCHED_SIZE);
-      }).then((batchedImagePath) => {
-        return uploadWithImageMetadata(batchedImagePath); //TODO: metadata needs to include original file IDs
+      }).then(([filePathsToBatch,dimensions]) => {
+        return stitchImageBatch(filePathsToBatch,dimensions);
+      }).then(([batchedImagePath,dimensions]) => {
+        return reduceQualityToFileSize(batchedImagePath,MAX_BATCHED_SIZE,dimensions);
+      }).then(([batchedImagePath,dimensions]) => {
+        return uploadWithImageMetadata(batchedImagePath,dimensions); //TODO: metadata needs to include original file IDs
       });
     } else {
       return Promise.resolve(); //do nothing if uploaded file isn't a "trigger" file
     }
-  }
+  });
 }
 
 //TODO: this should actually do something lol
-function reduceQualityToFileSize(batchedImagePath,desiredFileSize) {
-  return batchedImagePath;
+function reduceQualityToFileSize(batchedImagePath,desiredFileSize,dimensions) {
+  return Promise.resolve([batchedImagePath,dimensions]);
 }
 
 function getBatchFilenames() {  
   return sourceFile.getMetadata().then((data) => {
-    const metadata       = data[0];
-    const batchFilenames = metadata.metadata.batchFilenames; //will be empty if file isn't a "trigger" file with metadata specifying the other files in the batch
+    const metadata = data[0].metadata;
     
-    return (typeof variable === 'undefined') ? Promise.resolve(batchFilenames) : Promise.resolve([]);
-  }
+    if (!metadata) {return Promise.resolve([]);} //covers the case where absolutely no custom metadata exists for the object
+    
+    const batchFilenames = metadata.batchFilenames; //will be empty if file isn't a "trigger" file with metadata specifying the other files in the batch
+    
+    return (typeof variable === 'undefined') ? Promise.resolve(JSON.parse(batchFilenames)) : Promise.resolve([]);
+  });
 }
 
 function downloadBatchFiles(filenames) {
@@ -106,37 +114,54 @@ function resizeImagesToCommonDimensions(dimensions) {
       image.resize(maxDimensions.x,maxDimensions.y).write(filePath);
     });
   }).then(() => {
-    return Promise.resolve(Object.keys(dimensions));
+    return Promise.resolve([Object.keys(dimensions),maxDimensions]);
   });
 }
 
-function uploadWithImageMetadata(sourcePath,destFilename,dimensions) {
-  return upload(sourcePath,{destination: destFilename, metadata: {metadata: {width: dimensions.x, height: dimensions.y}}});
+function uploadWithImageMetadata(sourcePath,dimensions) {
+  let destFilename = sourcePath.split('/')[sourcePath.split('/').length-1];
+  
+  return destBucket.upload(sourcePath,{destination: destFilename, metadata: {metadata: {width: dimensions.x, height: dimensions.y}}});
 }
 
-function stitchImages(resizedImages) {
-  let stitchedImageFilename = '/tmp/final.jpg';
+function stitchImageBatch(filenames,dimensions) {
+  let stitchedImageFilename = filenames[0] + '-stitched.jpg';
   
-  let individualImageWidth = whatever; //TODO: figure this shit out
-  let rightPaddingWidth    = (Object.keys(resizedImages).length-1) * individualImageWidth;
+  let individualImageWidth  = dimensions.x;
+  let individualImageHeight = dimensions.y;
   
-  let filenames = Object.keys(resizedImages);
-  return resizedImages[filenames[0]].extend({right: rightPaddingWidth}).then((stitchedImage) => { //create room in the final image to overlay with component images
-    return stitchImagesToStrip(stitchedImage,resizedImages,filenames,individualImageWidth,1);
-  }).then((stitchedImage) => {
-    return stitchedImage.jpg(stitchedImageFilename); //TODO: am I doing this right?
+  const resizedImages = {};
+  return Promise.each(filenames, (filePath) => {
+    return Jimp.read(filePath).then((image) => {
+      resizedImages[filePath] = image;
+      
+      return Promise.resolve();
+    });
   }).then(() => {
-    return Promise.resolve(stitchedImageFilename,filenames);
-  });
-}
-
-//recursively pastes images from left to right on strip until it runs out of images
-function stitchImagesToStrip(stitchedImageStrip,resizedImages,filenames,imageWidth,index) {
-  return stitchedImageStrip.overlayWith(resizedImages[filenames[index]], {left: imageWidth*index}).then((stitchedImage) => {
-    if (index==filenames.length-1) {
-      return Promise.resolve(stitchedImage);
-    } else {
-      return stitchImagesToStrip(stitchedImage,resizedImages,filenames,imageWidth,index+1);
+    resizedImages[filenames[0]].contain(individualImageWidth*filenames.length,individualImageHeight,Jimp.HORIZONTAL_ALIGN_LEFT);
+    
+    return Promise.resolve(resizedImages[filenames[0]]);
+  }).then((stitchedImage) => { //create room in the final image to overlay with component images
+    const imageCompositePromises = [];
+    for (let i=1;i<filenames.length;i++) {
+      let imageCompositePromise = new Promise((resolve,reject) => {
+        stitchedImage.composite(resizedImages[filenames[i]],i*individualImageWidth,0);
+        resolve();
+      });
+      
+      imageCompositePromises.push(imageCompositePromise);
     }
+    
+    return Promise.each(imageCompositePromises, (imageCompositePromise) => {
+      return imageCompositePromise;
+    }).then(() => {
+      return Promise.resolve(stitchedImage);
+    });
+  }).then((stitchedImage) => {
+    stitchedImage.write(stitchedImageFilename);
+    
+    return Promise.resolve();
+  }).then(() => {
+    return Promise.resolve([stitchedImageFilename,individualImageWidth*resizedImages.length]);
   });
 }
