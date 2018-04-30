@@ -63,7 +63,7 @@ function getImageDimensions() {
     const height = metadata.height;
     const width  = metadata.width;
     
-    return (typeof height === 'undefined' || typeof width === 'undefined') ? Promise.resolve(JSON.parse({height: height, width: width})) : Promise.reject('Could not retrieve dimensions metadata');
+    return (typeof height !== 'undefined' || typeof width !== 'undefined') ? Promise.resolve(JSON.parse({height: height, width: width})) : Promise.reject('Could not retrieve dimensions metadata');
   });
 }
 
