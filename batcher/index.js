@@ -158,7 +158,7 @@ function stitchImageBatch(filenames,dimensions) {
       return Promise.resolve(stitchedImage);
     });
   }).then((stitchedImage) => {
-    stitchedImage.write(stitchedImageFilename);
+    stitchedImage.quality(90).write(stitchedImageFilename);
     
     return Promise.resolve();
   }).then(() => {
