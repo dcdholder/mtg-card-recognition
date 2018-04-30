@@ -56,7 +56,7 @@ function getBatchFilenames() {
     
     const batchFilenames = metadata.batchFilenames; //will be empty if file isn't a "trigger" file with metadata specifying the other files in the batch
     
-    return (typeof batchFilenames === 'undefined') ? Promise.resolve(JSON.parse(batchFilenames)) : Promise.resolve([]);
+    return (typeof batchFilenames !== 'undefined') ? Promise.resolve(JSON.parse(batchFilenames)) : Promise.resolve([]);
   });
 }
 
