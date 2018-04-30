@@ -5,7 +5,7 @@ const pubsub = require('@google-cloud/pubsub')();
 const vision = require('@google-cloud/vision');
 const client = new vision.ImageAnnotatorClient();
 
-const SCALING_FACTOR = 745;
+const CARD_ASPECT_RATIO = 1.4;
 
 const FIELDS = [
   {name: 'name', vertices: [{x: 0.0733, y:0.0747}, {x: 0.9213, y:0.0747}, {x: 0.9213, y:0.1347}, {x: 0.0733, y:0.1347}]},
@@ -13,30 +13,61 @@ const FIELDS = [
   {name: 'text', vertices: [{x: 0.0733, y:0.8827}, {x: 0.9213, y:0.8827}, {x: 0.9213, y:1.2493}, {x: 0.0733, y:1.2493}]}
 ]
 
+let sourceFile;
+
 exports.ocr = (event) => {  
-  const blobData = event.data;
+  const bucketEvent = event.data;
+  sourceFile        = sourceBucket.file(bucketEvent.name);
   
   const imageUri = 'gs://' + blobData.bucket + '/' + blobData.name;
   
-  return client.textDetection(imageUri).then((results) => {
+  let numCards;
+  let cardWidth;
+  
+  return getImageDimensions().then((dimensions) => {    
+    cardWidth = dimensions.height / CARD_ASPECT_RATIO;
+    numCards  = Math.round(dimensions.width / cardWidth);
+    
+    return client.textDetection(imageUri);
+  }).then((results) => {
     const textAnnotations = results[0].textAnnotations;
     
-    return recoverFieldText(textAnnotations);
+    return recoverFieldText(textAnnotations,numCards,cardWidth);
   }).then((fieldContents) => {
     const topic     = pubsub.topic(DEST_TOPIC_NAME);
     const publisher = topic.publisher();
   
-    const payload = {id: blobData.name, fields: fieldContents};
-  
-    const dataBuffer = Buffer.from(JSON.stringify(payload));
-  
-    return publisher.publish(dataBuffer);
+    const publishPromises = [];
+    for (let i=0;i<numCards;i++) {
+      let payload = {id: blobData.name + '-' + i, fields: fieldContents[i]};
+    
+      let dataBuffer = Buffer.from(JSON.stringify(payload));
+    
+      publishPromises.push(() => {return publisher.publish(dataBuffer);});
+    }
+    
+    return Promise.all(publishPromises);
   }).catch((err) => {
     console.error(err);
   });
 }
 
-function recoverFieldText(textAnnotations) {
+function getImageDimensions() {  
+  return sourceFile.getMetadata().then((data) => {
+    const metadata = data[0].metadata;
+    
+    if (!metadata) { //covers the case where absolutely no custom metadata exists for the object
+      throw new Error('Could not retrieve any custom metadata');
+    }
+    
+    const height = metadata.height;
+    const width  = metadata.width;
+    
+    return (typeof height === 'undefined' || typeof width === 'undefined') ? Promise.resolve(JSON.parse({height: height, width: width})) : Promise.reject('Could not retrieve dimensions metadata');
+  });
+}
+
+function recoverFieldText(textAnnotations,cardNum,cardWidth) {
   const lines = textAnnotations[0].description.split('\n');
 
   const firstWordIndex = [];
@@ -60,37 +91,44 @@ function recoverFieldText(textAnnotations) {
     fieldLineIndices[field.name] = [];
   }
 
-  for (let i=0;i<boundingPolys.length;i++) {
-    for (let field of FIELDS) {
-      if (verticesInside(boundingPolys[i],field.vertices)) {
-        fieldLineIndices[field.name].push(i);
+  for (let j=0;j<boundingPolys.length;j++) {
+    for (let i=0;i<cardNum;i++) {
+      for (let field of FIELDS) {
+        if (verticesInside(boundingPolys[j],field.vertices,cardNum,cardWidth)) {
+          fieldLineIndices[i][field.name].push(j);
+        }
       }
     }
   }
 
-  //sort line indices within each field 
-  for (let fieldName in fieldLineIndices) {
-    fieldLineIndices[fieldName].sort((a, b) => a-b);
+  //sort line indices within each field
+  for (let i=0;i<cardNum;i++) {
+    for (let fieldName in fieldLineIndices) {
+      fieldLineIndices[i][fieldName].sort((a, b) => a-b);
+    }
   }
 
   //recreate original field text from line array and recovered line indices
   const fieldContents = {};
-  for (let fieldName in fieldLineIndices) {
-    fieldContents[fieldName] = [];
-    for (let lineIndex of fieldLineIndices[fieldName]) {
-      fieldContents[fieldName].push(lines[lineIndex]);
+  for (let i=0;i<cardNum;i++) {
+    fieldContents[cardNum] = {};
+    for (let fieldName in fieldLineIndices[i]) {
+      fieldContents[i][fieldName] = [];
+      for (let lineIndex of fieldLineIndices[i][fieldName]) {
+        fieldContents[i][fieldName].push(lines[lineIndex]);
+      }
+      fieldContents[i][fieldName] = fieldContents[i][fieldName].join(' ');
     }
-    fieldContents[fieldName] = fieldContents[fieldName].join(' ');
   }
 
   return Promise.resolve(fieldContents);
 }
 
-function verticesInside(verticesA, verticesB) {
+function verticesInside(verticesA, verticesB, cardNum, cardWidth) {
   const center = {};
   
   center.x = Math.floor(verticesA[0].x + (verticesA[2].x-verticesA[0].x) / 2);
   center.y = Math.floor(verticesA[0].y + (verticesA[2].y-verticesA[0].y) / 2);
   
-  return (center.x > verticesB[0].x*SCALING_FACTOR && center.x < verticesB[2].x*SCALING_FACTOR) && (center.y > verticesB[0].y*SCALING_FACTOR && center.y < verticesB[2].y*SCALING_FACTOR);
+  return (center.x > verticesB[0].x*cardWidth*(cardNum+1) && center.x < verticesB[2].x*cardWidth*(cardNum+1)) && (center.y > verticesB[0].y*cardWidth && center.y < verticesB[2].y*cardWidth);
 }
