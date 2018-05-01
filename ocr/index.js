@@ -1,9 +1,12 @@
 const fs = require('fs');
 
-const pubsub = require('@google-cloud/pubsub')();
+const storage = require('@google-cloud/storage')();
+const pubsub  = require('@google-cloud/pubsub')();
 
-const vision = require('@google-cloud/vision');
+const vision  = require('@google-cloud/vision');
 const client = new vision.ImageAnnotatorClient();
+
+const DEST_TOPIC_NAME = 'projects/dcdholder-personal/topics/ocr-output';
 
 const CARD_ASPECT_RATIO = 1.4;
 
@@ -16,10 +19,11 @@ const FIELDS = [
 let sourceFile;
 
 exports.ocr = (event) => {  
-  const bucketEvent = event.data;
-  sourceFile        = sourceBucket.file(bucketEvent.name);
+  const bucketEvent  = event.data;
+  const sourceBucket = storage.bucket(bucketEvent.bucket);
+  sourceFile         = sourceBucket.file(bucketEvent.name);
   
-  const imageUri = 'gs://' + blobData.bucket + '/' + blobData.name;
+  const imageUri = 'gs://' + bucketEvent.bucket + '/' + bucketEvent.name;
   
   let numCards;
   let cardWidth;
@@ -37,13 +41,20 @@ exports.ocr = (event) => {
     const topic     = pubsub.topic(DEST_TOPIC_NAME);
     const publisher = topic.publisher();
   
+    console.log(fieldContents);
+  
     const publishPromises = [];
     for (let i=0;i<numCards;i++) {
-      let payload = {id: blobData.name + '-' + i, fields: fieldContents[i]};
+      let payload = {id: bucketEvent.name + '-' + i, fields: fieldContents[i]};
     
       let dataBuffer = Buffer.from(JSON.stringify(payload));
     
-      publishPromises.push(() => {return publisher.publish(dataBuffer);});
+      let publishPromise = 
+      publishPromises.push(() => {
+        return publisher.publish(dataBuffer).then(() => {
+          console.log(payload);
+        });
+      });
     }
     
     return Promise.all(publishPromises);
@@ -63,7 +74,7 @@ function getImageDimensions() {
     const height = metadata.height;
     const width  = metadata.width;
     
-    return (typeof height !== 'undefined' || typeof width !== 'undefined') ? Promise.resolve(JSON.parse({height: height, width: width})) : Promise.reject('Could not retrieve dimensions metadata');
+    return (typeof height !== 'undefined' || typeof width !== 'undefined') ? Promise.resolve({height: height, width: width}) : Promise.reject('Could not retrieve dimensions metadata');
   });
 }
 
@@ -87,14 +98,17 @@ function recoverFieldText(textAnnotations,cardNum,cardWidth) {
 
   //identify the field which each line-starting word index belongs to
   const fieldLineIndices = {};
-  for (let field of FIELDS) {
-    fieldLineIndices[field.name] = [];
+  for (let i=0;i<cardNum;i++) {
+    fieldLineIndices[i] = {};
+    for (let field of FIELDS) {
+      fieldLineIndices[i][field.name] = [];
+    }
   }
 
   for (let j=0;j<boundingPolys.length;j++) {
     for (let i=0;i<cardNum;i++) {
       for (let field of FIELDS) {
-        if (verticesInside(boundingPolys[j],field.vertices,cardNum,cardWidth)) {
+        if (verticesInside(boundingPolys[j],field.vertices,i,cardWidth)) {
           fieldLineIndices[i][field.name].push(j);
         }
       }
@@ -103,7 +117,7 @@ function recoverFieldText(textAnnotations,cardNum,cardWidth) {
 
   //sort line indices within each field
   for (let i=0;i<cardNum;i++) {
-    for (let fieldName in fieldLineIndices) {
+    for (let fieldName in fieldLineIndices[i]) {
       fieldLineIndices[i][fieldName].sort((a, b) => a-b);
     }
   }
@@ -111,7 +125,7 @@ function recoverFieldText(textAnnotations,cardNum,cardWidth) {
   //recreate original field text from line array and recovered line indices
   const fieldContents = {};
   for (let i=0;i<cardNum;i++) {
-    fieldContents[cardNum] = {};
+    fieldContents[i] = {};
     for (let fieldName in fieldLineIndices[i]) {
       fieldContents[i][fieldName] = [];
       for (let lineIndex of fieldLineIndices[i][fieldName]) {
@@ -130,5 +144,5 @@ function verticesInside(verticesA, verticesB, cardNum, cardWidth) {
   center.x = Math.floor(verticesA[0].x + (verticesA[2].x-verticesA[0].x) / 2);
   center.y = Math.floor(verticesA[0].y + (verticesA[2].y-verticesA[0].y) / 2);
   
-  return (center.x > verticesB[0].x*cardWidth*(cardNum+1) && center.x < verticesB[2].x*cardWidth*(cardNum+1)) && (center.y > verticesB[0].y*cardWidth && center.y < verticesB[2].y*cardWidth);
+  return (center.x > (verticesB[0].x+cardNum)*cardWidth && center.x < (verticesB[2].x+cardNum)*cardWidth) && (center.y > verticesB[0].y*cardWidth && center.y < verticesB[2].y*cardWidth);
 }
