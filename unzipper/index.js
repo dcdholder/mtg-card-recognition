@@ -2,9 +2,11 @@ const fs    = require('fs');
 const yauzl = require('yauzl');
 
 const storage = require('@google-cloud/storage')();
+const pubsub  = require('@google-cloud/pubsub')();
 
 const TEMPORARY_DIRECTORY = '/tmp/';
 const DEST_BUCKET_NAME    = 'mtg-card-recognition-images-to-batch';
+const DEST_TOPIC_NAME     = 'projects/dcdholder-personal/topics/unzipper-output';
 
 //these must be global for localFileToBucketWithBatchingMetadata to work
 const destBucket = storage.bucket(DEST_BUCKET_NAME);
@@ -106,22 +108,31 @@ function localFileToBucketWithBatchingMetadata(filename,filenames,totalCount) {
     let nonTriggerFiles             = destFilenames.slice(index-(adjustedBatchSize-1),index);
     let batchFiles                  = [destFilename];
     batchFiles.push(...nonTriggerFiles);
-
-    let triggerFileUploadOptions = {destination: destFilename, metadata: {metadata: {batchFilenames: JSON.stringify(batchFiles)}}};
     
-    let nonTriggerFileUploads = [];
+    let imageUploads = [];
     for (let i=0;i<nonTriggerFiles.length;i++) {
-      nonTriggerFileUploads.push(new Promise((resolve,reject) => {
-        destBucket.upload(nonTriggerOriginalFilenames[i],{destination: nonTriggerFiles[i]}).then(() => {
-          resolve();
-        });
+      imageUploads.push(new Promise((resolve,reject) => {
+        destBucket.upload(nonTriggerOriginalFilenames[i],{destination: nonTriggerFiles[i]}).then(() => {resolve();});
       }));
     }
+    imageUploads.push(new Promise((resolve,reject) => {
+      destBucket.upload(filename,{destination: destFilename}).then(() => {resolve();});
+    }));
     
-    return Promise.all(nonTriggerFileUploads).then(() => {
-      return destBucket.upload(filename,triggerFileUploadOptions);
+    return Promise.all(imageUploads).then(() => {
+      batchNotification(batchFiles); //we do not need to wait for trigger image to upload or pubsub to publish before uploading more images - no "return"
     });
   } else {
     return Promise.resolve();
   }
+}
+
+function batchNotification(filenames) {
+  const topic     = pubsub.topic(DEST_TOPIC_NAME);
+  const publisher = topic.publisher();
+  
+  let payload    = {filenames: filenames}; 
+  let dataBuffer = Buffer.from(JSON.stringify(payload));
+  
+  return publisher.publish(dataBuffer);
 }
