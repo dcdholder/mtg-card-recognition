@@ -9,37 +9,30 @@ const Jimp = require('jimp');
 const MAX_BATCHED_SIZE = 10 * 1024 * 1024;
 
 const TEMPORARY_DIRECTORY = '/tmp/';
- 
+
+const SOURCE_BUCKET_NAME = 'mtg-card-recognition-images-to-batch';
+const sourceBucket       = storage.bucket(SOURCE_BUCKET_NAME); 
+
 const DEST_BUCKET_NAME = 'mtg-card-recognition-images';
 const destBucket       = storage.bucket(DEST_BUCKET_NAME);
 
-let bucketEvent;
-let sourceBucket;
-let sourceFile;
+let imageData;
 
 //operates purely on bucket file metadata
-exports.imageBatcher = (event) => {
-  bucketEvent = event.data;
-
-  sourceBucket = storage.bucket(bucketEvent.bucket);
-  sourceFile   = sourceBucket.file(bucketEvent.name);
+exports.batcher = (event) => {
+  const pubsubData = event.data; //TODO: deserialize?  
+  imageData        = JSON.parse(Buffer.from(pubsubData.data, 'base64').toString());
   
-  return getBatchFilenames().then((batchFilenames) => {
-    if (batchFilenames.length!=0) {
-      return downloadBatchFiles(batchFilenames).then((batchFilePaths) => {
-        return getDimensionsOfImages(batchFilePaths);
-      }).then((dimensionsOfImages) => {
-        return resizeImagesToCommonDimensions(dimensionsOfImages);
-      }).then(([filePathsToBatch,dimensions]) => {
-        return stitchImageBatch(filePathsToBatch,dimensions);
-      }).then(([batchedImagePath,dimensions]) => {
-        return reduceQualityToFileSize(batchedImagePath,MAX_BATCHED_SIZE,dimensions);
-      }).then(([batchedImagePath,dimensions]) => {
-        return uploadWithImageMetadata(batchedImagePath,dimensions); //TODO: metadata needs to include original file IDs
-      });
-    } else {
-      return Promise.resolve(); //do nothing if uploaded file isn't a "trigger" file
-    }
+  return downloadBatchFiles(imageData.filenames).then((batchFilePaths) => {
+    return getDimensionsOfImages(batchFilePaths);
+  }).then((dimensionsOfImages) => {
+    return resizeImagesToCommonDimensions(dimensionsOfImages);
+  }).then(([filePathsToBatch,dimensions]) => {
+    return stitchImageBatch(filePathsToBatch,dimensions);
+  }).then(([batchedImagePath,dimensions]) => {
+    return reduceQualityToFileSize(batchedImagePath,MAX_BATCHED_SIZE,dimensions);
+  }).then(([batchedImagePath,dimensions]) => {
+    return uploadWithImageMetadata(batchedImagePath,dimensions); //TODO: metadata needs to include original file IDs
   });
 }
 
