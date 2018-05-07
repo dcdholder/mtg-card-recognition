@@ -79,7 +79,14 @@ function getImageDimensions() {
 }
 
 function recoverFieldText(textAnnotations,cardNum,cardWidth) {
-  const lines = textAnnotations[0].description.split('\n');
+  //strip out any unicode
+  const strippedAnnotations = [];
+  for (let i=0; i<textAnnotations.length; i++) {
+	strippedAnnotations.push(textAnnotations[i]);
+    strippedAnnotations[i].description = strippedAnnotations[i].description.replace(/[^\x00-\x7F]/g, "");
+  }
+  
+  const lines = strippedAnnotations[0].description.split('\n');
 
   const firstWordIndex = [];
 
@@ -93,7 +100,7 @@ function recoverFieldText(textAnnotations,cardNum,cardWidth) {
   //identify the bounding polys associated with each line-starting word (output is an array of the line-starting word bounding polys ordered by line number)
   const boundingPolys = [];
   for (let i=0;i<firstWordIndex.length;i++) {
-    boundingPolys.push(textAnnotations[firstWordIndex[i]+1].boundingPoly.vertices);
+    boundingPolys.push(strippedAnnotations[firstWordIndex[i]+1].boundingPoly.vertices);
   }
 
   //identify the field which each line-starting word index belongs to
